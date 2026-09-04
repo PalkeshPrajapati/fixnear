@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { BecomeProviderForm } from "@/components/dashboard/BecomeProviderForm";
+import { BookingStatusButtons } from "@/components/dashboard/BookingStatusButtons";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -45,6 +47,23 @@ function RoleBadge({ role }: { role: string }) {
   );
 }
 
+function BookingStatusBadge({ status }: { status: "PENDING" | "APPROVED" | "DENIED" }) {
+  const styles: Record<string, { bg: string; text: string; label: string }> = {
+    PENDING: { bg: "#fef3c7", text: "#b45309", label: "Pending" },
+    APPROVED: { bg: "#dcfce7", text: "#15803d", label: "Approved" },
+    DENIED: { bg: "#fef2f2", text: "#dc2626", label: "Denied" },
+  };
+  const s = styles[status] ?? styles.PENDING;
+  return (
+    <span
+      className="px-2.5 py-0.5 rounded-full text-xs font-semibold"
+      style={{ backgroundColor: s.bg, color: s.text }}
+    >
+      {s.label}
+    </span>
+  );
+}
+
 function InfoRow({
   label,
   value,
@@ -72,7 +91,7 @@ export default async function DashboardPage() {
   if (!session?.user) redirect("/auth/sign-in");
 
   // ── Parallel data fetch ───────────────────────────────────────────────
-  const [dbUser, userReviews, providerProfile, allCategories] = await Promise.all([
+  const [dbUser, userReviews, providerProfile, allCategories, userBookings] = await Promise.all([
     prisma.user.findUnique({
       where: { id: session.user.id },
       select: {
@@ -98,9 +117,30 @@ export default async function DashboardPage() {
     }),
     prisma.provider.findUnique({
       where: { userId: session.user.id },
-      include: { categories: true, reviews: true },
+      include: {
+        categories: true,
+        reviews: true,
+        bookings: {
+          include: {
+            user: { select: { name: true, email: true } },
+          },
+          orderBy: { createdAt: "desc" },
+        },
+      },
     }),
     prisma.category.findMany({ orderBy: { name: "asc" } }),
+    prisma.booking.findMany({
+      where: { userId: session.user.id },
+      include: {
+        provider: {
+          include: {
+            user: { select: { name: true } },
+            categories: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
   ]);
 
   if (!dbUser) redirect("/auth/sign-in");
@@ -211,11 +251,21 @@ export default async function DashboardPage() {
                 label="Reviews given"
                 value={`${userReviews.length} review${userReviews.length !== 1 ? "s" : ""}`}
               />
+              <InfoRow
+                label="Bookings requested"
+                value={`${userBookings.length} booking${userBookings.length !== 1 ? "s" : ""}`}
+              />
               {providerProfile && (
-                <InfoRow
-                  label="Reviews received"
-                  value={`${providerProfile.reviews.length} review${providerProfile.reviews.length !== 1 ? "s" : ""}`}
-                />
+                <>
+                  <InfoRow
+                    label="Reviews received"
+                    value={`${providerProfile.reviews.length} review${providerProfile.reviews.length !== 1 ? "s" : ""}`}
+                  />
+                  <InfoRow
+                    label="Incoming bookings"
+                    value={`${providerProfile.bookings.length} request${providerProfile.bookings.length !== 1 ? "s" : ""}`}
+                  />
+                </>
               )}
             </div>
           </div>
@@ -252,9 +302,17 @@ export default async function DashboardPage() {
 
                 {/* Stats row */}
                 <div
-                  className="grid grid-cols-2 sm:grid-cols-3 gap-4 p-4 rounded-lg"
+                  className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-4 rounded-lg"
                   style={{ backgroundColor: "var(--bg-muted)" }}
                 >
+                  <div className="flex flex-col gap-1">
+                    <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>
+                      {providerProfile.bookings.length}
+                    </p>
+                    <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                      Booking requests
+                    </p>
+                  </div>
                   <div className="flex flex-col gap-1">
                     <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>
                       {providerProfile.reviews.length}
@@ -342,11 +400,262 @@ export default async function DashboardPage() {
         </div>
       </section>
 
+      {/* ── Incoming Bookings (Provider only) ─────────────────────────── */}
+      {providerProfile && (
+        <section
+          id="incoming-bookings"
+          className="section"
+          style={{ borderTop: "1px solid var(--border-light)" }}
+        >
+          <div className="container flex flex-col gap-6">
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-3">
+                <h2
+                  className="text-xl sm:text-2xl font-bold"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  Incoming Booking Requests
+                </h2>
+                {providerProfile.bookings.length > 0 && (
+                  <span
+                    className="px-2.5 py-0.5 rounded-full text-xs font-semibold"
+                    style={{ backgroundColor: "var(--bg-muted)", color: "var(--text-secondary)" }}
+                  >
+                    {providerProfile.bookings.length}
+                  </span>
+                )}
+              </div>
+              <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                Manage appointment requests sent to your service profile
+              </p>
+            </div>
+
+            {providerProfile.bookings.length > 0 ? (
+              <ul className="flex flex-col gap-4" role="list">
+                {providerProfile.bookings.map((booking) => {
+                  const bookingDate = new Intl.DateTimeFormat("en-IN", {
+                    weekday: "short",
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  }).format(booking.date);
+
+                  const requestedOn = new Intl.DateTimeFormat("en-IN", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  }).format(booking.createdAt);
+
+                  const userInitial = booking.user.name?.[0]?.toUpperCase() ?? "U";
+
+                  return (
+                    <li
+                      key={booking.id}
+                      role="listitem"
+                      className="card p-5 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                    >
+                      <div className="flex items-start gap-4">
+                        <div
+                          className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
+                          style={{ backgroundColor: "var(--brand-primary)" }}
+                          aria-hidden="true"
+                        >
+                          {userInitial}
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold text-sm" style={{ color: "var(--text-primary)" }}>
+                              {booking.user.name}
+                            </span>
+                            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                              • {booking.user.email}
+                            </span>
+                            <BookingStatusBadge status={booking.status} />
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--text-secondary)" }}>
+                            <span className="font-medium text-blue-600">
+                              📅 Scheduled Date: {bookingDate}
+                            </span>
+                            <span style={{ color: "var(--text-muted)" }}>
+                              (Sent on {requestedOn})
+                            </span>
+                          </div>
+
+                          {booking.notes && (
+                            <p
+                              className="text-xs sm:text-sm mt-1 p-2.5 rounded-lg"
+                              style={{ backgroundColor: "var(--bg-muted)", color: "var(--text-primary)" }}
+                            >
+                              &ldquo;{booking.notes}&rdquo;
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end">
+                        {booking.status === "PENDING" ? (
+                          <BookingStatusButtons bookingId={booking.id} />
+                        ) : (
+                          <span className="text-xs font-medium px-3 py-1 rounded" style={{ backgroundColor: "var(--bg-muted)", color: "var(--text-muted)" }}>
+                            {booking.status === "APPROVED" ? "Approved" : "Denied"}
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <div
+                className="py-12 flex flex-col items-center gap-2 rounded-xl text-center"
+                style={{ border: "1px dashed var(--border-medium)" }}
+              >
+                <p className="text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
+                  No incoming booking requests
+                </p>
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  When clients request an appointment with you, it will appear here.
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* ── My Bookings (Client / User) ───────────────────────────────── */}
+      <section
+        id="my-bookings"
+        className="section"
+        style={{
+          borderTop: "1px solid var(--border-light)",
+          backgroundColor: providerProfile ? "var(--bg-muted)" : "transparent",
+        }}
+      >
+        <div className="container flex flex-col gap-6">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-3">
+              <h2
+                className="text-xl sm:text-2xl font-bold"
+                style={{ color: "var(--text-primary)" }}
+              >
+                My Bookings
+              </h2>
+              {userBookings.length > 0 && (
+                <span
+                  className="px-2.5 py-0.5 rounded-full text-xs font-semibold"
+                  style={{ backgroundColor: "var(--bg-card)", color: "var(--text-secondary)" }}
+                >
+                  {userBookings.length}
+                </span>
+              )}
+            </div>
+            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+              Services and appointments you have requested with providers
+            </p>
+          </div>
+
+          {userBookings.length > 0 ? (
+            <ul className="flex flex-col gap-4" role="list">
+              {userBookings.map((booking) => {
+                const bookingDate = new Intl.DateTimeFormat("en-IN", {
+                  weekday: "short",
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                }).format(booking.date);
+
+                const providerInitial =
+                  booking.provider.user.name?.[0]?.toUpperCase() ?? "P";
+
+                return (
+                  <li
+                    key={booking.id}
+                    role="listitem"
+                    className="card p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                  >
+                    <div className="flex items-start gap-4">
+                      <div
+                        className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
+                        style={{ backgroundColor: "#64748b" }}
+                        aria-hidden="true"
+                      >
+                        {providerInitial}
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Link
+                            href={`/providers/${booking.providerId}`}
+                            className="font-semibold text-sm hover:underline"
+                            style={{ color: "var(--brand-primary)" }}
+                          >
+                            {booking.provider.user.name}
+                          </Link>
+                          {booking.provider.categories?.map((cat) => (
+                            <span
+                              key={cat.id}
+                              className="px-2 py-0.5 rounded-full text-[10px] font-medium"
+                              style={{ backgroundColor: "#eff6ff", color: "var(--brand-primary)" }}
+                            >
+                              {cat.name}
+                            </span>
+                          ))}
+                          <BookingStatusBadge status={booking.status} />
+                        </div>
+
+                        <p className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
+                          📅 Service Scheduled for: <span style={{ color: "var(--text-primary)" }}>{bookingDate}</span>
+                        </p>
+
+                        {booking.notes && (
+                          <p
+                            className="text-xs mt-1 p-2 rounded"
+                            style={{ backgroundColor: "var(--bg-muted)", color: "var(--text-secondary)" }}
+                          >
+                            Note: {booking.notes}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 self-end sm:self-center">
+                      <Link
+                        href={`/providers/${booking.providerId}`}
+                        className="btn btn-outline text-xs py-1.5 px-3"
+                      >
+                        View Profile
+                      </Link>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <div
+              className="py-12 flex flex-col items-center gap-2 rounded-xl text-center"
+              style={{ border: "1px dashed var(--border-medium)" }}
+            >
+              <p className="text-sm font-semibold" style={{ color: "var(--text-secondary)" }}>
+                No bookings yet
+              </p>
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                Find a provider in your area to book repairs and services.
+              </p>
+              <Link href="/" className="btn btn-primary text-xs py-1.5 px-4 mt-2">
+                Browse Services
+              </Link>
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* ── Reviews I've given ───────────────────────────────────────── */}
       <section
         id="my-reviews"
         className="section"
-        style={{ backgroundColor: "var(--bg-muted)" }}
+        style={{ backgroundColor: providerProfile ? "transparent" : "var(--bg-muted)" }}
       >
         <div className="container flex flex-col gap-6">
           {/* Section heading */}

@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { headers } from "next/headers";
 import { ReviewForm } from "@/components/providers/ReviewForm";
+import { BookingForm } from "@/components/providers/BookingForm";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -416,9 +417,34 @@ export default async function ProviderPage({ params }: ProviderPageProps) {
             </div>
           </div>
 
-          {/* ── Right column: Write a review ─────────────────────── */}
-          <div className="lg:col-span-1">
-            <div id="write-review" className="card p-6 flex flex-col gap-5 sticky top-20">
+          {/* ── Right column: Book & Review ─────────────────────── */}
+          <div className="lg:col-span-1 flex flex-col gap-6 sticky top-20">
+            {/* Booking Card */}
+            <div id="request-booking" className="card p-6 flex flex-col gap-5">
+              <div className="flex flex-col gap-1">
+                <h2
+                  className="text-lg font-bold"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  Book Service
+                </h2>
+                <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                  Schedule an appointment with {provider.user.name.split(" ")[0]}
+                </p>
+              </div>
+
+              <hr style={{ borderColor: "var(--border-light)" }} />
+
+              <BookingForm
+                providerId={provider.id}
+                providerName={provider.user.name}
+                isGuest={isGuest}
+                isSelf={provider.userId === currentUserId}
+              />
+            </div>
+
+            {/* Write a review card */}
+            <div id="write-review" className="card p-6 flex flex-col gap-5">
               <div className="flex flex-col gap-1">
                 <h2
                   className="text-lg font-bold"
